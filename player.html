@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Water Surface Player</title>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jsmediatags/3.9.5/jsmediatags.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/color-thief/2.3.2/color-thief.umd.js"></script>
+
+    <style>
+        :root {
+            --accent-color: #ffffff;
+            --bg-blob-1: #4facfe;
+            --bg-blob-2: #00f2fe;
+            --card-bg: rgba(255, 255, 255, 0.08);
+            --text-main: #ffffff;
+            --text-sub: rgba(255, 255, 255, 0.6);
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif;
+            background: #000;
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            user-select: none;
+            cursor: pointer; /* 提示可点击 */
+        }
+
+        /* --- 1. 修复：高亮点击冲击波 --- */
+        .ripple {
+            position: absolute;
+            border-radius: 50%;
+            /* 空心光圈设计 */
+            border: 2px solid rgba(255, 255, 255, 0.8);
+            box-shadow: 0 0 15px rgba(255,255,255,0.5);
+            transform: scale(0);
+            animation: ripple-shock 0.6s ease-out forwards;
+            pointer-events: none;
+            z-index: 99999; /* 确保在所有图层最上方 */
+        }
+        @keyframes ripple-shock {
+            0% { transform: scale(0); opacity: 1; border-width: 4px; }
+            100% { transform: scale(4); opacity: 0; border-width: 0px; }
+        }
+
+        /* --- 2. 背景与SVG滤镜 --- */
+        .ambient-bg { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: -2; background: #080808; }
+        .blob {
+            position: absolute; border-radius: 50%; filter: blur(90px); opacity: 0.7;
+            mix-blend-mode: screen; transition: background-color 1s;
+        }
+        .blob-1 { top: -20%; left: -20%; width: 80vw; height: 80vw; background: var(--bg-blob-1); animation: float1 15s infinite alternate linear; }
+        .blob-2 { bottom: -20%; right: -20%; width: 90vw; height: 90vw; background: var(--bg-blob-2); animation: float2 20s infinite alternate linear; }
+        
+        @keyframes float1 { from { transform: translate(0,0) rotate(0deg); } to { transform: translate(100px, 50px) rotate(20deg); } }
+        @keyframes float2 { from { transform: translate(0,0) rotate(0deg); } to { transform: translate(-100px, -50px) rotate(-20deg); } }
+
+        /* SVG 水波滤镜定义 (隐藏) */
+        .svg-filters { position: absolute; width: 0; height: 0; pointer-events: none; }
+
+        /* --- 3. 场景容器 --- */
+        .scene {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            /* 漂浮动画 */
+            animation: floating 4s ease-in-out infinite;
+        }
+        @keyframes floating {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-10px); }
+        }
+
+        /* --- 播放器通用样式 --- */
+        .player-shape {
+            width: 900px; height: 480px;
+            border-radius: 40px;
+            display: flex;
+            overflow: hidden;
+            position: relative;
+        }
+
+        /* 主体 */
+        .player-main {
+            z-index: 10;
+            background: var(--card-bg);
+            backdrop-filter: blur(50px) saturate(180%);
+            -webkit-backdrop-filter: blur(50px) saturate(180%);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            box-shadow: 0 40px 100px rgba(0,0,0,0.6), inset 0 0 0 1px rgba(255,255,255,0.1);
+        }
+
+        /* 倒影 (核心修复) */
+        .player-reflection {
+            /* 挂在下面 */
+            position: absolute; top: 100%; left: 0;
+            /* 物理镜像 */
+            transform: scaleY(-1);
+            transform-origin: top;
+            
+            /* 视觉处理 */
+            opacity: 0.6; /* 可见度 */
+            margin-top: 2px; /* 接缝 */
+            
+            /* 关键：应用 SVG 水波扭曲滤镜 */
+            filter: url('#water-displacement') blur(1px); 
+            
+            /* 关键：强力渐隐遮罩 */
+            mask-image: linear-gradient(to top, transparent 20%, black 90%);
+            -webkit-mask-image: linear-gradient(to top, transparent 20%, black 90%);
+            
+            pointer-events: none;
+            z-index: 1;
+            /* 倒影背景稍微暗一点 */
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        /* --- 内部布局 --- */
+        .left-panel { width: 45%; height: 100%; padding: 40px; display: flex; flex-direction: column; align-items: center; justify-content: center; border-right: 1px solid rgba(255,255,255,0.1); }
+        .right-panel { width: 55%; height: 100%; padding: 50px; display: flex; flex-direction: column; justify-content: center; position: relative; }
+
+        /* 黑胶 */
+        .vinyl-wrapper { width: 300px; height: 300px; position: relative; display: flex; justify-content: center; align-items: center; margin-bottom: 20px; }
+        .vinyl-disc {
+            width: 280px; height: 280px; border-radius: 50%;
+            background: #111;
+            background-image: repeating-radial-gradient(#1a1a1a 0, #1a1a1a 2px, #000 3px, #000 4px);
+            box-shadow: 0 15px 40px rgba(0,0,0,0.6); position: absolute;
+            display: flex; justify-content: center; align-items: center;
+        }
+        .spin-anim { animation: spin 6s linear infinite; }
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+
+        .art-cover { width: 160px; height: 160px; border-radius: 50%; background-color: #333; background-size: cover; background-position: center; border: 4px solid #000; }
+        
+        .needle {
+            position: absolute; top: -15px; right: -15px; width: 100px; height: 100px;
+            background: url('https://cdn-icons-png.flaticon.com/512/860/860289.png') no-repeat center/contain;
+            filter: invert(1); opacity: 0.9; transform-origin: top right; transform: rotate(-35deg);
+            transition: transform 0.6s cubic-bezier(0.3, 1.5, 0.6, 1); z-index: 20;
+        }
+        .needle-active { transform: rotate(0deg) !important; }
+
+        .viz-canvas { width: 80%; height: 60px; opacity: 0.8; }
+
+        /* 右侧控件 */
+        .top-row { position: absolute; top: 30px; left: 50px; right: 40px; display: flex; justify-content: space-between; align-items: center; }
+        .badges { display: flex; gap: 8px; }
+        .badge { font-size: 10px; font-weight: 800; color: var(--accent-color); border: 1px solid var(--accent-color); padding: 2px 6px; border-radius: 4px; opacity: 0.8; }
+        .upload-icon { width: 32px; height: 32px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.3); display: flex; justify-content: center; align-items: center; cursor: pointer; transition: 0.2s; background: rgba(255,255,255,0.1); }
+        .upload-icon:hover { background: white; } .upload-icon:hover svg { stroke: black; }
+
+        .song-meta { margin-top: 30px; margin-bottom: 20px; }
+        .title { font-size: 40px; font-weight: 700; margin-bottom: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .artist { font-size: 18px; color: var(--text-sub); }
+
+        .prog-wrap { width: 100%; margin-bottom: 30px; }
+        .prog-track { width: 100%; height: 6px; background: rgba(255,255,255,0.15); border-radius: 3px; cursor: pointer; position: relative; }
+        .prog-bar { height: 100%; width: 0%; background: var(--accent-color); border-radius: 3px; position: absolute; box-shadow: 0 0 15px var(--accent-color); transition: width 0.1s linear;}
+        .time-txt { display: flex; justify-content: space-between; margin-top: 8px; font-size: 12px; color: var(--text-sub); font-family: monospace; }
+
+        .ctrl-box { display: flex; align-items: center; gap: 35px; }
+        .c-btn { background: none; border: none; cursor: pointer; display: flex; align-items: center; transition: 0.2s; color: white; }
+        .c-btn:active { transform: scale(0.9); }
+        .c-btn svg { fill: white; }
+        .play-icon svg { width: 64px; height: 64px; filter: drop-shadow(0 4px 10px rgba(0,0,0,0.3)); }
+        .sec-icon svg { width: 26px; height: 26px; opacity: 0.7; }
+
+        .vol-box { position: absolute; bottom: 40px; right: 50px; width: 100px; display: flex; align-items: center; gap: 8px; opacity: 0.5; transition: 0.3s; }
+        .vol-box:hover { opacity: 1; }
+        #fileInput { display: none; }
+
+        /* 倒影层简化 */
+        .player-reflection .top-row, .player-reflection .vol-box, .player-reflection .time-txt { opacity: 0.2; }
+    </style>
+</head>
+<body>
+
+    <svg class="svg-filters">
+        <filter id="water-displacement">
+            <feTurbulence type="fractalNoise" baseFrequency="0.01 0.02" numOctaves="1" result="noise" />
+            <feDisplacementMap in="SourceGraphic" in2="noise" scale="8" />
+        </filter>
+    </svg>
+
+    <div class="ambient-bg">
+        <div class="blob blob-1"></div>
+        <div class="blob blob-2"></div>
+    </div>
+
+    <div class="scene">
+        <div class="player-shape player-main" id="mainPlayer">
+            <div class="left-panel">
+                <div class="vinyl-wrapper">
+                    <div class="needle main-needle"></div>
+                    <div class="vinyl-disc main-disc">
+                        <div class="art-cover main-art"></div>
+                    </div>
+                </div>
+                <canvas id="vizMain" class="viz-canvas"></canvas>
+            </div>
+
+            <div class="right-panel">
+                <div class="top-row">
+                    <div class="badges">
+                        <span class="badge">LOSSLESS</span>
+                        <span class="badge">HI-RES</span>
+                    </div>
+                    <div class="upload-icon" onclick="document.getElementById('fileInput').click()" title="Select Music">
+                        <svg width="18" height="18" viewBox="0 0 24 24" stroke="white" stroke-width="2.5" fill="none"><path d="M12 5v14M5 12h14"/></svg>
+                    </div>
+                    <input type="file" id="fileInput" accept="audio/*">
+                </div>
+
+                <div class="song-meta">
+                    <div class="title" id="titleMain">Select Music</div>
+                    <div class="artist" id="artistMain">Local Player</div>
+                </div>
+
+                <div class="prog-wrap">
+                    <div class="prog-track" id="progBg">
+                        <div class="prog-bar" id="progFg"></div>
+                    </div>
+                    <div class="time-txt">
+                        <span id="tCurr">0:00</span>
+                        <span id="tDur">--:--</span>
+                    </div>
+                </div>
+
+                <div class="ctrl-box">
+                    <button class="c-btn sec-icon"><svg viewBox="0 0 24 24"><path d="M14 8V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h7a2 2 0 0 0 2-2v-2" stroke="white" stroke-width="2" fill="none"/><path d="M20 12H7m3-3l-3 3 3 3" stroke="white" stroke-width="2" fill="none"/></svg></button>
+                    <button class="c-btn sec-icon" onclick="skip(-5)"><svg viewBox="0 0 24 24"><path d="M11 18V6l-8.5 6 8.5 6zm.5-6l8.5 6V6l-8.5 6z"/></svg></button>
+                    
+                    <button class="c-btn play-icon" id="playBtn">
+                        <svg id="iconPlay" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                        <svg id="iconPause" viewBox="0 0 24 24" style="display:none"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+                    </button>
+                    
+                    <button class="c-btn sec-icon" onclick="skip(5)"><svg viewBox="0 0 24 24"><path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z"/></svg></button>
+                    <button class="c-btn sec-icon"><svg viewBox="0 0 24 24"><path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5" stroke="white" stroke-width="2" fill="none"/></svg></button>
+                </div>
+
+                <div class="vol-box">
+                    <svg width="16" viewBox="0 0 24 24" fill="white"><path d="M3 9v6h4l5 5V4L7 9H3z"/></svg>
+                    <div class="prog-track" id="volBg" style="height:4px"><div class="prog-bar" id="volFg" style="width:80%"></div></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="player-shape player-reflection" id="reflectPlayer">
+            <div class="left-panel">
+                <div class="vinyl-wrapper">
+                    <div class="needle reflect-needle"></div>
+                    <div class="vinyl-disc reflect-disc">
+                        <div class="art-cover reflect-art"></div>
+                    </div>
+                </div>
+                <canvas id="vizReflect" class="viz-canvas"></canvas>
+            </div>
+            <div class="right-panel">
+                <div class="song-meta">
+                    <div class="title" id="titleRef">Select Music</div>
+                    <div class="artist" id="artistRef">Local Player</div>
+                </div>
+                <div class="prog-wrap">
+                    <div class="prog-track">
+                        <div class="prog-bar" id="progFgRef"></div>
+                    </div>
+                </div>
+                <div class="ctrl-box" style="opacity:0.5">
+                    <button class="c-btn sec-icon"><svg viewBox="0 0 24 24"><path d="M14 8V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h7a2 2 0 0 0 2-2v-2" stroke="white" stroke-width="2" fill="none"/><path d="M20 12H7m3-3l-3 3 3 3" stroke="white" stroke-width="2" fill="none"/></svg></button>
+                    <button class="c-btn sec-icon"><svg viewBox="0 0 24 24"><path d="M11 18V6l-8.5 6 8.5 6zm.5-6l8.5 6V6l-8.5 6z"/></svg></button>
+                    <button class="c-btn play-icon"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></button>
+                    <button class="c-btn sec-icon"><svg viewBox="0 0 24 24"><path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z"/></svg></button>
+                    <button class="c-btn sec-icon"><svg viewBox="0 0 24 24"><path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5" stroke="white" stroke-width="2" fill="none"/></svg></button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <audio id="audioPlayer" crossorigin="anonymous"></audio>
+
+    <script>
+        // --- 1. 点击波纹 ---
+        document.addEventListener('click', (e) => {
+            const r = document.createElement('div');
+            r.className = 'ripple';
+            r.style.width = r.style.height = '80px';
+            r.style.left = (e.clientX - 40) + 'px';
+            r.style.top = (e.clientY - 40) + 'px';
+            document.body.appendChild(r);
+            setTimeout(() => r.remove(), 600);
+        });
+
+        // --- 2. 逻辑 ---
+        const audio = document.getElementById('audioPlayer');
+        const colorThief = new ColorThief();
+        let audioCtx, analyser, source;
+        let isCtxSetup = false;
+
+        const UI = {
+            main: {
+                title: document.getElementById('titleMain'),
+                artist: document.getElementById('artistMain'),
+                art: document.querySelector('.main-art'),
+                disc: document.querySelector('.main-disc'),
+                needle: document.querySelector('.main-needle'),
+                prog: document.getElementById('progFg'),
+                canvas: document.getElementById('vizMain'),
+                ctx: document.getElementById('vizMain').getContext('2d')
+            },
+            ref: {
+                title: document.getElementById('titleRef'),
+                artist: document.getElementById('artistRef'),
+                art: document.querySelector('.reflect-art'),
+                disc: document.querySelector('.reflect-disc'),
+                needle: document.querySelector('.reflect-needle'),
+                prog: document.getElementById('progFgRef'),
+                canvas: document.getElementById('vizReflect'),
+                ctx: document.getElementById('vizReflect').getContext('2d')
+            }
+        };
+
+        // 加载文件
+        document.getElementById('fileInput').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if(!file) return;
+
+            if(!isCtxSetup) setupAudio();
+            else if(audioCtx.state === 'suspended') audioCtx.resume();
+
+            audio.src = URL.createObjectURL(file);
+            const simpleName = file.name.replace(/\.[^/.]+$/, "");
+            updateMeta(simpleName, "Local File", null);
+
+            jsmediatags.read(file, {
+                onSuccess: (tag) => {
+                    const t = tag.tags;
+                    const title = t.title || simpleName;
+                    const artist = t.artist || "Unknown Artist";
+                    let url = null;
+                    if(t.picture) {
+                        const {data, format} = t.picture;
+                        let base64 = "";
+                        for(let i=0; i<data.length; i++) base64 += String.fromCharCode(data[i]);
+                        url = `data:${format};base64,${window.btoa(base64)}`;
+                        
+                        const img = new Image();
+                        img.src = url;
+                        img.onload = () => {
+                            try {
+                                const p = colorThief.getPalette(img, 3);
+                                document.documentElement.style.setProperty('--bg-blob-1', `rgb(${p[0]})`);
+                                document.documentElement.style.setProperty('--bg-blob-2', `rgb(${p[1]})`);
+                                document.documentElement.style.setProperty('--accent-color', `rgb(${p[0]})`);
+                            } catch(e){}
+                        }
+                    }
+                    updateMeta(title, artist, url);
+                    togglePlay(true);
+                },
+                onError: () => togglePlay(true)
+            });
+        });
+
+        function updateMeta(title, artist, url) {
+            UI.main.title.innerText = UI.ref.title.innerText = title;
+            UI.main.artist.innerText = UI.ref.artist.innerText = artist;
+            const bg = url ? `url(${url})` : 'linear-gradient(135deg, #444, #222)';
+            UI.main.art.style.backgroundImage = bg;
+            UI.ref.art.style.backgroundImage = bg;
+        }
+
+        // 播放控制
+        const playBtn = document.getElementById('playBtn');
+        playBtn.onclick = () => togglePlay();
+
+        function togglePlay(force = null) {
+            if(!audio.src) { alert("Please click (+) to load music"); return; }
+            if(audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+
+            const shouldPlay = force === true || (force === null && audio.paused);
+
+            if(shouldPlay) {
+                audio.play();
+                document.getElementById('iconPlay').style.display='none';
+                document.getElementById('iconPause').style.display='block';
+                
+                UI.main.disc.classList.add('spin-anim');
+                UI.ref.disc.classList.add('spin-anim');
+                UI.main.needle.classList.add('needle-active');
+                UI.ref.needle.classList.add('needle-active');
+            } else {
+                audio.pause();
+                document.getElementById('iconPlay').style.display='block';
+                document.getElementById('iconPause').style.display='none';
+                
+                UI.main.disc.classList.remove('spin-anim');
+                UI.ref.disc.classList.remove('spin-anim');
+                UI.main.needle.classList.remove('needle-active');
+                UI.ref.needle.classList.remove('needle-active');
+            }
+        }
+
+        function skip(sec) { audio.currentTime += sec; }
+
+        function setupAudio() {
+            if(isCtxSetup) return;
+            const AC = window.AudioContext || window.webkitAudioContext;
+            audioCtx = new AC();
+            analyser = audioCtx.createAnalyser();
+            source = audioCtx.createMediaElementSource(audio);
+            source.connect(analyser);
+            analyser.connect(audioCtx.destination);
+            analyser.fftSize = 128;
+            isCtxSetup = true;
+            loop();
+        }
+
+        function loop() {
+            requestAnimationFrame(loop);
+            
+            if(audio.duration) {
+                const pct = (audio.currentTime/audio.duration)*100 + '%';
+                UI.main.prog.style.width = pct;
+                UI.ref.prog.style.width = pct;
+                document.getElementById('tCurr').innerText = fmtTime(audio.currentTime);
+                document.getElementById('tDur').innerText = fmtTime(audio.duration);
+            }
+
+            drawViz(UI.main.canvas, UI.main.ctx);
+            drawViz(UI.ref.canvas, UI.ref.ctx);
+        }
+
+        function drawViz(cvs, ctx) {
+            cvs.width = cvs.offsetWidth;
+            cvs.height = cvs.offsetHeight;
+            ctx.clearRect(0,0,cvs.width,cvs.height);
+
+            const buffer = analyser.frequencyBinCount;
+            const data = new Uint8Array(buffer);
+            analyser.getByteFrequencyData(data);
+            
+            ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--accent-color');
+            const bars = 30;
+            const w = (cvs.width / bars) * 0.6;
+            const gap = (cvs.width / bars) * 0.4;
+            const step = Math.floor(buffer / bars);
+
+            for(let i=0; i<bars; i++) {
+                const h = (data[i*step] / 255) * cvs.height;
+                ctx.beginPath();
+                ctx.roundRect(i*(w+gap), cvs.height - h, w, h, 2);
+                ctx.fill();
+            }
+        }
+
+        document.getElementById('progBg').onclick = (e) => {
+            const w = document.getElementById('progBg').clientWidth;
+            audio.currentTime = (e.offsetX/w) * audio.duration;
+        }
+        document.getElementById('volBg').parentNode.onclick = (e) => {
+             const w = document.getElementById('volBg').clientWidth;
+             let v = e.offsetX/w;
+             if(v<0)v=0; if(v>1)v=1;
+             audio.volume = v;
+             document.getElementById('volFg').style.width = (v*100)+'%';
+        }
+
+        function fmtTime(s) {
+            const m = Math.floor(s/60);
+            const sc = Math.floor(s%60);
+            return `${m}:${sc<10?'0':''}${sc}`;
+        }
+        audio.onended = () => togglePlay(false);
+
+    </script>
+</body>
+</html>
